@@ -1,0 +1,72 @@
+services:
+  api:
+    build: ./server
+    container_name: confAdogpt_api
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - CHUNK_SIZE_BYTES=${CHUNK_SIZE_BYTES:-90000}
+      - AUTO_INGEST=${AUTO_INGEST:-0}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-*}
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      # --- RAG / embeddings ---
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
+      - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
+      - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
+      - EMBED_BATCH_SLEEP_MS=${EMBED_BATCH_SLEEP_MS:-0}
+      - EMBED_MAX_RETRIES=${EMBED_MAX_RETRIES:-6}
+      - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
+      - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-8000}
+      # --- Observability (optional) ---
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      # --- Code features (optional) ---
+      - ENABLE_TREE_SITTER=${ENABLE_TREE_SITTER:-0}
+      - CODE_ROOT=${CODE_ROOT}
+      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE}
+    ports:
+      - "9001:8000"
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - ./index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  ingest:
+    build: ./server
+    container_name: confAdogpt_ingest
+    command: ["python", "-m", "app.indexer", "--data-root", "/data", "--index-path", "/index/docs.db", "--ado-root", "${ADO_ROOT:-/ado}"]
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      # RAG vars (no external calls used by indexer; harmless pass-through)
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
+      - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
+      - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
+      - EMBED_BATCH_SLEEP_MS=${EMBED_BATCH_SLEEP_MS:-0}
+      - EMBED_MAX_RETRIES=${EMBED_MAX_RETRIES:-6}
+      - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
+      - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-8000}
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - ./index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    profiles: ["tools"]
+

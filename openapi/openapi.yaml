@@ -1,0 +1,128 @@
+openapi: 3.1.0
+info:
+  title: Confluence Evidence API
+  version: "1.3.2"
+servers:
+  - url: http://localhost:9000
+  - url: http://localhost:8000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    PagedResponse:
+      type: object
+      properties:
+        items: { type: array, items: { type: object } }
+        next: { type: integer, nullable: true }
+        approx_bytes: { type: integer }
+security: [{ bearerAuth: [] }]
+paths:
+  /v1/health:
+    get:
+      operationId: health
+      summary: Liveness probe
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+  /v1/search:
+    get:
+      operationId: search
+      summary: Full-text search with byte-capped page
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: space
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200 }
+        - in: query
+          name: cursor
+          schema: { type: integer, default: 0 }
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedResponse'
+  /v1/stream/search:
+    get:
+      operationId: streamSearch
+      summary: NDJSON streaming search
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+        - in: query
+          name: space
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 200 }
+        - in: query
+          name: cursor
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: chunk_bytes
+          schema: { type: integer, default: 90000 }
+      responses:
+        '200':
+          description: NDJSON stream
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+  /v1/fetch:
+    get:
+      operationId: fetchByIds
+      summary: Fetch items by IDs (paged)
+      parameters:
+        - in: query
+          name: ids
+          schema: { type: string }
+        - in: query
+          name: chunk_bytes
+          schema: { type: integer, default: 90000 }
+      responses:
+        '200':
+          description: Results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PagedResponse'
+  /v1/stream/fetch:
+    get:
+      operationId: streamFetch
+      summary: NDJSON streaming fetch
+      parameters:
+        - in: query
+          name: ids
+          schema: { type: string }
+        - in: query
+          name: chunk_bytes
+          schema: { type: integer, default: 90000 }
+      responses:
+        '200':
+          description: NDJSON stream
+          content:
+            application/x-ndjson:
+              schema:
+                type: string

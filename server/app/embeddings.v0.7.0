@@ -1,0 +1,379 @@
+# Project:Confluence Evidence API  Component:embeddings  Version:v0.7.0
+from __future__ import annotations
+import os
+import time
+import math
+import random
+import threading
+from collections import deque
+from typing import List, Tuple
+
+from .embed_cache import EmbedCache
+
+# -----------------------------
+# Environment / Defaults
+# -----------------------------
+ALLOW_REMOTE = os.getenv("ALLOW_REMOTE_EMBEDDINGS", "0") == "1"
+MODEL_DEFAULT = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+DIM_DEFAULT = int(os.getenv("EMBED_DIM", "1536"))
+
+RPM_LIMIT = int(os.getenv("EMBED_RPM_LIMIT", "5000"))
+TPM_LIMIT = int(os.getenv("EMBED_TPM_LIMIT", "1000000"))
+HEADROOM_BASE = float(os.getenv("EMBED_HEADROOM", "0.75"))
+
+MAX_ITEM_TOK = int(os.getenv("EMBED_MAX_TOKENS_PER_ITEM", "6000"))
+MAX_REQ_TOK = int(os.getenv("EMBED_MAX_TOKENS_PER_REQ", "200000"))
+
+BATCH_SLEEP_MS = int(os.getenv("EMBED_BATCH_SLEEP_MS", "0"))
+COOLDOWN_SEC = int(os.getenv("EMBED_COOLDOWN_SEC", "300"))
+
+CONCURRENCY = max(1, int(os.getenv("EMBED_CONCURRENCY", "1")))  # TTFB-gated concurrency
+WINDOW_SEC = 60.0
+EPS = 0.05  # base safety sleep (seconds)
+JITTER_MS = (8, 24)  # jitter after sleeps to avoid boundary collisions
+
+# Singleton holder so the API process shares limiter state with the debug router
+_EMBEDDER_SINGLETON = None
+
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def _approx_tokens(s: str) -> int:
+    return math.ceil(len(s) / 4) if s else 0
+
+
+def _truncate_to_tokens(s: str, max_tokens: int) -> str:
+    if max_tokens <= 0 or not s:
+        return s or ""
+    approx_chars = max_tokens * 4
+    return s if len(s) <= approx_chars else s[:approx_chars]
+
+
+def _hash_text(t: str) -> str:
+    import hashlib
+    return hashlib.sha256((t or "").encode("utf-8")).hexdigest()
+
+
+def _truncate_batch_to_req(texts: List[str]) -> List[str]:
+    toks = [_approx_tokens(t) for t in texts]
+    total = sum(toks)
+    if total <= MAX_REQ_TOK:
+        return texts
+    ratio = MAX_REQ_TOK / max(total, 1)
+    out = []
+    for t in texts:
+        target_tok = max(1, int(_approx_tokens(t) * ratio))
+        out.append(_truncate_to_tokens(t, target_tok))
+    return out
+
+
+# -----------------------------
+# Abstract interface
+# -----------------------------
+class Embedder:
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        raise NotImplementedError
+
+
+# -----------------------------
+# TTFB-gated Sliding Limiter
+# -----------------------------
+class SlidingLimiter:
+    """
+    TTFB-gated, dual-constraint (RPM + TPM) 60s sliding-window limiter.
+
+    - Maintains a deque of (arrival_time, tokens) using TTFB as the 'arrival' mark.
+    - Before sending a new request, checks if adding it would exceed RPM or TPM
+      within the 60s sliding window. If so, sleeps until the earliest expiry
+      that clears constraints (plus epsilon/jitter).
+    - Enforces a 'no pile-up' rule: at most EMBED_CONCURRENCY in-flight requests
+      are allowed without a TTFB observed.
+    """
+    def __init__(self, rpm_limit: int, tpm_limit: int, headroom: float):
+        self.rpm_budget = max(1, int(rpm_limit * headroom))
+        self.tpm_budget = max(1000, int(tpm_limit * headroom))
+        self.headroom = headroom
+
+        self._lock = threading.Lock()
+        self._win: deque[Tuple[float, int]] = deque()  # (arrival_time, tokens) in ascending arrival order
+        self._inflight_wo_ttfb = 0
+
+        # public counters (for debug router snapshot)
+        self.req_used = 0
+        self.tok_used = 0
+
+        # one-way delay estimation for arrival prediction when hook is unavailable
+        self._ema_oneway = 0.050  # 50ms initial
+        self._max_oneway = 0.050
+
+        # cooldown backstop
+        self._cooldown_until = 0.0
+
+    def _jitter_sleep(self, sec: float):
+        if sec > 0:
+            time.sleep(sec)
+        time.sleep(random.uniform(JITTER_MS[0], JITTER_MS[1]) / 1000.0)
+
+    def _purge_window(self, now_or_arrival: float):
+        # remove entries older than 60s relative to 'now_or_arrival'
+        while self._win and (now_or_arrival - self._win[0][0]) >= WINDOW_SEC:
+            self._win.popleft()
+        # update counters
+        self.req_used = len(self._win)
+        self.tok_used = sum(c for _, c in self._win)
+
+    def _predicted_arrival(self) -> float:
+        # conservative one-way prediction (floor at 15ms)
+        return max(self._ema_oneway, self._max_oneway, 0.015)
+
+    def acquire(self, c_next: int):
+        """
+        Block until safe to send next request:
+          - no in-flight pile-up beyond CONCURRENCY without TTFB observed
+          - adding this request won't exceed RPM/TPM in the sliding window
+        """
+        while True:
+            now = time.monotonic()
+            with self._lock:
+                if now < self._cooldown_until:
+                    pass  # handled below after releasing the lock
+                else:
+                    # TTFB-gated concurrency
+                    if self._inflight_wo_ttfb >= CONCURRENCY:
+                        # wait for a TTFB to arrive
+                        pass
+                    else:
+                        # predict arrival if we send now
+                        a_next = now + self._predicted_arrival()
+                        self._purge_window(a_next)
+                        R = self.req_used
+                        T = self.tok_used
+
+                        if (R + 1) <= self.rpm_budget and (T + c_next) <= self.tpm_budget:
+                            # Reserve an in-flight slot (add to window on TTFB)
+                            self._inflight_wo_ttfb += 1
+                            return
+
+                        # compute earliest safe time
+                        wait_r = 0.0
+                        deficit_r = (R + 1) - self.rpm_budget
+                        if deficit_r > 0 and self._win:
+                            idx = int(deficit_r) - 1
+                            if 0 <= idx < len(self._win):
+                                t_expire = self._win[idx][0] + WINDOW_SEC
+                                wait_r = max(0.0, t_expire - a_next)
+
+                        wait_t = 0.0
+                        over_t = (T + c_next) - self.tpm_budget
+                        if over_t > 0 and self._win:
+                            acc = 0
+                            for t_i, c_i in self._win:
+                                acc += c_i
+                                if acc >= over_t:
+                                    t_expire = t_i + WINDOW_SEC
+                                    wait_t = max(0.0, t_expire - a_next)
+                                    break
+
+                        waits = [w for w in (wait_r, wait_t) if w > 0]
+                        if waits:
+                            # sleep to earliest expiry plus epsilon
+                            wait = max(EPS, min(waits))
+                            self._jitter_sleep(wait)
+                            continue
+                        else:
+                            # constraints block but no entries? be conservative
+                            self._jitter_sleep(EPS)
+                            continue
+
+            # outside lock: either cooldown or inflight gate blocked
+            if now < self._cooldown_until:
+                self._jitter_sleep(max(EPS, self._cooldown_until - now))
+            else:
+                # inflight gate
+                self._jitter_sleep(EPS)
+
+    def on_ttfb(self, c_tokens: int, ttfb_time: float | None = None):
+        """
+        Called when TTFB is observed (ideal), or at response-return time (fallback).
+        """
+        with self._lock:
+            if self._inflight_wo_ttfb > 0:
+                self._inflight_wo_ttfb -= 1
+            a = ttfb_time or time.monotonic()
+            self._win.append((a, c_tokens))
+            self._purge_window(a)
+
+    def on_rtt(self, rtt_sec: float):
+        if rtt_sec <= 0:
+            return
+        one_way = max(0.0, rtt_sec / 2.0)
+        # EMA update
+        alpha = 0.80
+        self._ema_oneway = alpha * self._ema_oneway + (1 - alpha) * one_way
+        # decay the max slowly; clamp to 500ms
+        self._max_oneway = max(min(one_way, 0.500), self._max_oneway * 0.98)
+
+    def cooldown(self, seconds: float):
+        with self._lock:
+            self._cooldown_until = max(self._cooldown_until, time.monotonic() + max(1.0, seconds))
+
+    # ------ debug snapshot ------
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "headroom": self.headroom,
+                "rpm_budget": self.rpm_budget,
+                "tpm_budget": self.tpm_budget,
+                "rpm_used": self.req_used,
+                "tpm_used": self.tok_used,
+                "cooldown_until": self._cooldown_until if self._cooldown_until > 0 else None,
+                "inflight_without_ttfb": self._inflight_wo_ttfb,
+                "ema_oneway_ms": round(self._ema_oneway * 1000.0, 2),
+            }
+
+
+# -----------------------------
+# OpenAI Embedder (remote only)
+# -----------------------------
+class OpenAIEmbedder(Embedder):
+    """
+    Remote embeddings with:
+      - Persistent disk cache + hot LRU
+      - TTFB-gated, dual-constraint 60s sliding-window limiter (RPM+TPM)
+      - Optional httpx response hook to capture TTFB
+    """
+    # Expose coarse counters for legacy debug (class-level)
+    _hf = HEADROOM_BASE
+    _req_used = 0
+    _tok_used = 0
+    _cooldown_until = 0.0
+
+    def __init__(self, model: str | None = None):
+        if not ALLOW_REMOTE:
+            raise RuntimeError("Remote embeddings disabled. Set ALLOW_REMOTE_EMBEDDINGS=1")
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("INSUFFICIENT CONTEXT — PROVIDE OPENAI_API_KEY")
+
+        self.model = model or MODEL_DEFAULT
+        self.dim = DIM_DEFAULT
+        self.cache = EmbedCache(os.getenv("EMBED_CACHE_PATH", "/index/embed_cache.sqlite"))
+
+        # Limiter
+        self._limiter = SlidingLimiter(RPM_LIMIT, TPM_LIMIT, HEADROOM_BASE)
+
+        # TTFB hook via httpx if available
+        self._tls = threading.local()
+        self._hook_enabled = False
+        try:
+            import httpx
+            from openai import OpenAI
+
+            def _on_response(resp: "httpx.Response"):
+                ttfb = time.monotonic()
+                c = getattr(self._tls, "pending_tokens", 0)
+                self._limiter.on_ttfb(c, ttfb)
+                # RTT refined at the end (we capture total time below)
+
+            self._httpx_client = httpx.Client(event_hooks={"response": [_on_response]})
+            self.client = OpenAI(api_key=api_key, http_client=self._httpx_client)
+            self._hook_enabled = True
+        except Exception:
+            from openai import OpenAI
+            self.client = OpenAI(api_key=api_key)
+            self._hook_enabled = False
+
+    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+        if not texts:
+            return []
+
+        # Normalize / truncate per item
+        texts = [_truncate_to_tokens(t or "", MAX_ITEM_TOK) for t in texts]
+
+        # Cap total tokens per request
+        total_tok = sum(_approx_tokens(t) for t in texts)
+        if total_tok > MAX_REQ_TOK:
+            texts = _truncate_batch_to_req(texts)
+            total_tok = sum(_approx_tokens(t) for t in texts)
+
+        # Cache-first
+        hashes = [_hash_text(t) for t in texts]
+        want = [(h, self.model) for h in hashes]
+        cached = self.cache.get_many(want)
+
+        out: List[List[float]] = [None] * len(texts)  # type: ignore
+        miss_idx, miss_texts, miss_hashes = [], [], []
+        for i, (h, t) in enumerate(zip(hashes, texts)):
+            v = cached.get(h)
+            if v is not None:
+                out[i] = v
+            else:
+                miss_idx.append(i); miss_texts.append(t); miss_hashes.append(h)
+
+        if not miss_idx:
+            return out  # type: ignore
+
+        # Acquire limiter (TTFB-gated)
+        self._limiter.acquire(total_tok)
+        send_start = time.monotonic()
+        self._tls.pending_tokens = total_tok
+
+        # Send request
+        from openai import RateLimitError, APIError, APIConnectionError, Timeout
+        try:
+            res = self.client.embeddings.create(model=self.model, input=miss_texts)
+
+            # If TTFB hook not enabled, approximate arrival at response time
+            if not self._hook_enabled:
+                self._limiter.on_ttfb(total_tok, time.monotonic())
+
+            # Update RTT
+            self._limiter.on_rtt(time.monotonic() - send_start)
+
+            # Map results to output array
+            for j, item in enumerate(res.data):
+                out[miss_idx[j]] = item.embedding
+
+            # Persist to cache
+            to_put = [(miss_hashes[j], self.model, self.dim, out[miss_idx[j]]) for j in range(len(miss_idx))]
+            self.cache.put_many(to_put)
+
+        except RateLimitError:
+            # Should not happen with strict limiter unless external org traffic exists.
+            self._limiter.cooldown(COOLDOWN_SEC)
+            raise
+        except (APIConnectionError, Timeout):
+            raise
+        except APIError:
+            raise
+
+        # Update class-level counters for legacy debug
+        OpenAIEmbedder._hf = self._limiter.headroom
+        OpenAIEmbedder._req_used = self._limiter.req_used
+        OpenAIEmbedder._tok_used = self._limiter.tok_used
+        OpenAIEmbedder._cooldown_until = self._limiter._cooldown_until
+
+        # Optional pacing between batches
+        if BATCH_SLEEP_MS > 0:
+            time.sleep(BATCH_SLEEP_MS / 1000.0)
+
+        return out  # type: ignore
+
+    # ------------- Debug snapshot for router -------------
+    def debug_snapshot(self) -> dict:
+        snap = self._limiter.snapshot()
+        return snap
+
+
+# -----------------------------
+# Factory (singleton)
+# -----------------------------
+def get_embedder(dim_hint: int | None = None) -> Embedder:
+    global _EMBEDDER_SINGLETON
+    if not ALLOW_REMOTE:
+        raise RuntimeError("Remote embeddings disabled; set ALLOW_REMOTE_EMBEDDINGS=1")
+    if _EMBEDDER_SINGLETON is None:
+        _EMBEDDER_SINGLETON = OpenAIEmbedder()
+    return _EMBEDDER_SINGLETON
+

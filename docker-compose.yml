@@ -1,0 +1,201 @@
+# Project: confAdogpt  Component: compose  Version: v0.5.0
+services:
+  api:
+    build: ./server
+    container_name: RAG_Conf_ADO_api
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - CHUNK_SIZE_BYTES=${CHUNK_SIZE_BYTES:-90000}
+      - AUTO_INGEST=${AUTO_INGEST:-0}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-*}
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      - API_KEY=${API_KEY}
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
+      - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
+      - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
+      - EMBED_BATCH_SLEEP_MS=${EMBED_BATCH_SLEEP_MS:-0}
+      - EMBED_MAX_RETRIES=${EMBED_MAX_RETRIES:-4}
+      - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
+      - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-4000}
+      - OPENAI_TIMEOUT_SECS=${OPENAI_TIMEOUT_SECS:-30}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - ENABLE_TREE_SITTER=${ENABLE_TREE_SITTER:-0}
+      - CODE_ROOT=${CODE_ROOT}
+      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE}
+      - OCR_ENABLED=${OCR_ENABLED:-0}
+      - OCR_PDF_IF_EMPTY=${OCR_PDF_IF_EMPTY:-0}
+      - OCR_IMAGES=${OCR_IMAGES:-0}
+      - OCR_DPI=${OCR_DPI:-50}
+      - OCR_JOBS=${OCR_JOBS:-0}
+    ports:
+      - "9800:8000"
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+      - ./scripts:/app/scripts:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    cpus: "2.00"
+    mem_reservation: "1g"
+    mem_limit: "2g"
+    memswap_limit: "2g"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+    restart: unless-stopped
+
+  ingest:
+    build: ./server
+    container_name: confAdogpt_ingest
+    command: ["python", "-m", "app.indexer", "--data-root", "/data", "--index-path", "/index/docs.db", "--ado-root", "${ADO_ROOT:-/ado}"]
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    profiles: ["tools"]
+    cpus: "2.00"
+    mem_reservation: "3g"
+    mem_limit: "6g"
+    memswap_limit: "6g"
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+    restart: on-failure
+
+  att_ingest:
+    build: ./server
+    container_name: confAdogpt_att_ingest
+    command: ["python", "-u", "-m", "app.attachments_ingest", "--spaces", "ALL", "--batch", "300"]
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      - OCR_ENABLED=${OCR_ENABLED:-0}
+      - OCR_PDF_IF_EMPTY=${OCR_PDF_IF_EMPTY:-0}
+      - OCR_IMAGES=${OCR_IMAGES:-0}
+      - OCR_DPI=${OCR_DPI:-50}
+      - OCR_JOBS=${OCR_JOBS:-0}
+      - ALLOW_QUERY_FALLBACK=${ALLOW_QUERY_FALLBACK:-1}
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
+      - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
+      - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
+      - EMBED_BATCH_SLEEP_MS=${EMBED_BATCH_SLEEP_MS:-0}
+      - EMBED_MAX_RETRIES=${EMBED_MAX_RETRIES:-4}
+      - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
+      - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-4000}
+      - OPENAI_TIMEOUT_SECS=${OPENAI_TIMEOUT_SECS:-30}
+      - ATT_LOG_PATH=/index/attachments_ingest.log
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    profiles: ["tools"]
+    cpus: "2.00"
+    mem_reservation: "3g"
+    mem_limit: "6g"
+    memswap_limit: "6g"
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+    restart: on-failure
+
+  code_ingest:
+    build: ./server
+    container_name: confAdogpt_code_ingest
+    command: ["python", "-u", "-m", "app.code_ingest", "--code-root", "/code"]
+    environment:
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - CODE_ROOT=/code
+      - CODE_SPACE=${CODE_SPACE:-CODE}
+      - CODE_LOG_PATH=/index/code_ingest.log
+      - CODE_MAX_FILE_BYTES=${CODE_MAX_FILE_BYTES:-3145728}
+      - CODE_CHUNK_LINES=${CODE_CHUNK_LINES:-180}
+      - CODE_CHUNK_OVERLAP=${CODE_CHUNK_OVERLAP:-40}
+      - CODE_BATCH_EMBED_SIZE=${CODE_BATCH_EMBED_SIZE:-256}
+      - CODE_FLUSH_EVERY_FILES=${CODE_FLUSH_EVERY_FILES:-50}
+      - CODE_TARGET_TOKENS=${CODE_TARGET_TOKENS:-800}
+      - CODE_OVERLAP_TOKENS=${CODE_OVERLAP_TOKENS:-120}
+      - CODE_ALLOW_PATH_RE=${CODE_ALLOW_PATH_RE:-}
+      - CODE_DENY_PATH_RE=${CODE_DENY_PATH_RE:-}
+      - CODE_MAX_DEPTH=${CODE_MAX_DEPTH:-0}
+      - CODE_MAX_FILES=${CODE_MAX_FILES:-0}
+      - CODE_READ_WORKERS=${CODE_READ_WORKERS:-4}
+      - CODE_CACHE_PATH=${CODE_CACHE_PATH:-/index/code_ingest_cache.sqlite}
+      - CODE_PROGRESS_PATH=${CODE_PROGRESS_PATH:-/index/code_ingest.progress.json}
+      - CODE_REPO_NAME=${CODE_REPO_NAME:-}
+      - CODE_BUILD_XREF=${CODE_BUILD_XREF:-0}
+      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE:-}
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
+      - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
+      - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
+      - EMBED_BATCH_SLEEP_MS=${EMBED_BATCH_SLEEP_MS:-0}
+      - EMBED_MAX_RETRIES=${EMBED_MAX_RETRIES:-4}
+      - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
+      - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-4000}
+      - OPENAI_TIMEOUT_SECS=${OPENAI_TIMEOUT_SECS:-30}
+    volumes:
+      - ${CODE_HOST_PATH:-/mnt/disks/data/source-code}:/code:ro
+      - ./index:/index
+    profiles: ["tools"]
+    cpus: "1.25"
+    mem_reservation: "3g"
+    mem_limit: "6g"
+    memswap_limit: "6g"
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+    restart: on-failure
+
+  xref_build:
+    build: ./server
+    container_name: confAdogpt_xref_build
+    command: ["python", "-u", "-m", "app.xref_build"]
+    environment:
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - XREF_LOG_PATH=/index/xref_build.log
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - XREF_FANOUT_MAX=${XREF_FANOUT_MAX:-32}
+      - XREF_PROGRESS_EVERY=${XREF_PROGRESS_EVERY:-50000}
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
+    profiles: ["tools"]
+    cpus: "1.00"
+    mem_reservation: "1g"
+    mem_limit: "2g"
+    memswap_limit: "2g"
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
+    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
+    restart: on-failure
+

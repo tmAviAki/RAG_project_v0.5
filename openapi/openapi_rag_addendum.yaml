@@ -1,0 +1,108 @@
+openapi: 3.1.0
+info:
+  title: Confluence Local Action API (RAG Addendum)
+  version: "1.3.6"
+  description: |
+    RAG endpoints layered on top of the core API.
+    Vector store persists unit-length row vectors; cosine = dot.
+servers:
+  - url: http://localhost:9000
+  - url: http://localhost:8000
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+security: [{ bearerAuth: [] }]
+paths:
+  /v1/semantic/search:
+    post:
+      operationId: semanticSearch
+      summary: Semantic vector search over chunked documents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q: { type: string }
+                k: { type: integer, default: 8 }
+                score_threshold: { type: number, minimum: 0.0, maximum: 1.0 }
+      responses:
+        '200':
+          description: Hits
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        space: { type: string }
+                        snippet: { type: string }
+                        score: { type: number }
+                        url: { type: string }
+  /v1/answer:
+    post:
+      operationId: answer
+      summary: Compose an answer from top-k retrieved chunks with citations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+                k: { type: integer, default: 12 }
+                force_abstain_if_no_citations: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Answer with citations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer: { type: string }
+                  citations:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        space: { type: string }
+                        url: { type: string }
+                        score: { type: number }
+  /v1/stream/answer:
+    post:
+      operationId: streamAnswer
+      summary: NDJSON streaming answer with citations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+                k: { type: integer, default: 12 }
+                force_abstain_if_no_citations: { type: boolean, default: true }
+      responses:
+        '200':
+          description: NDJSON stream of events
+          content:
+            application/x-ndjson:
+              schema:
+                type: string

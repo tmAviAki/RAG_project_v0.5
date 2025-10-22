@@ -1,0 +1,6 @@
+*.db*
+dist/
+export_data/
+index/
+__pycache__/
+*.pyc

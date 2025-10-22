@@ -1,0 +1,8 @@
+from __future__ import annotations
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/v1", tags=["system"])
+
+@router.get("/health")
+def health() -> dict:
+    return {"ok": True}

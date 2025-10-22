@@ -1,0 +1,8 @@
+# To enable semantic and code routes, add these imports to app/main.py:
+#
+# from .routers import semantic, code
+# app.include_router(semantic.router)
+# app.include_router(code.router)
+#
+# These are additive; they do not change existing endpoints.
+

@@ -1,0 +1,13 @@
+{
+  "KERNEL": "3.10.0-1160.105.1.el7.x86_64", 
+  "STORAGE_DRIVER": "overlay2", 
+  "CGROUPS": "tmpfs", 
+  "MEM_TOTAL_MB": "15790", 
+  "HOSTNAME": "vspp-centos79", 
+  "CPUS": "2", 
+  "COMPOSE_VERSION": "2.27.1", 
+  "DOCKER_VERSION": "26.1.4", 
+  "DOCKER_ROOT": "/mnt/disks/data/docker-data", 
+  "LOGGING_DRIVER": "json-file", 
+  "SWAP_TOTAL_MB": "12991"
+}

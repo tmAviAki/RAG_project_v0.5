@@ -1,0 +1,52 @@
+services:
+  api:
+    build: ./server
+    container_name: confAdogpt_api
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      - CHUNK_SIZE_BYTES=${CHUNK_SIZE_BYTES:-90000}
+      - AUTO_INGEST=${AUTO_INGEST:-0}
+      - ALLOW_ORIGINS=${ALLOW_ORIGINS:-*}
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      # --- RAG / embeddings ---
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+      # --- Observability (optional; no-op if unset) ---
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      # --- Code features (optional) ---
+      - ENABLE_TREE_SITTER=${ENABLE_TREE_SITTER:-0}
+      - CODE_ROOT=${CODE_ROOT}
+      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE}
+    ports:
+      - "9001:8000"
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - ./index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  ingest:
+    build: ./server
+    container_name: confAdogpt_ingest
+    command: ["python", "-m", "app.indexer", "--data-root", "/data", "--index-path", "/index/docs.db", "--ado-root", "${ADO_ROOT:-/ado}"]
+    environment:
+      - DATA_ROOT=/data
+      - INDEX_PATH=/index/docs.db
+      - ADO_ROOT=${ADO_ROOT:-/ado}
+      - INDEX_ROOT=${INDEX_ROOT:-/index}
+      # The ingest job does not require embeddings; variables included for consistency/no-ops.
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - EMBED_DIM=${EMBED_DIM:-1536}
+    volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
+      - ./index:/index
+      - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
+    profiles: ["tools"]
+

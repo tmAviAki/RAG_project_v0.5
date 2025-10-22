@@ -1,0 +1,101 @@
+# Project: confAdogpt  Component: Dockerfile  Version: v1.2.0
+# Base: multi-arch slim Python 3.11
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# System deps for performance, HTML parsing, MIME detection, PDF, OCR
+# - poppler-utils: pdftotext
+# - tesseract-ocr + tesseract-ocr-eng: OCR engine + English lang
+# - ocrmypdf: PDF OCR pipeline (pulls required helpers)
+# - qpdf, ghostscript, unpaper, pngquant: common ocrmypdf helpers
+# - libmagic1: for python-magic
+# - curl: healthcheck & diagnostics
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential \
+      curl ca-certificates \
+      libxml2 libxslt1.1 \
+      libmagic1 \
+      poppler-utils \
+      tesseract-ocr tesseract-ocr-eng \
+      ocrmypdf qpdf ghostscript unpaper pngquant \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python deps: project requirements first to leverage layering
+COPY requirements.txt ./
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Add document/OCR/python extras that are not guaranteed by requirements.txt
+# (kept separate so you can manage them later in requirements.txt if desired)
+RUN pip install --no-cache-dir \
+      pillow \
+      pytesseract \
+      python-docx \
+      python-pptx \
+      openpyxl \
+      python-magic
+
+# App code
+COPY app ./app
+
+# Uvicorn/Logging config with timestamps and DEBUG level across modules.
+# We generate a minimal log config to ensure consistent timestamps
+# for uvicorn, app, and any library loggers.
+RUN printf '%s\n' "\
+[loggers]\
+keys=root,uvicorn,uvicorn.error,uvicorn.access\
+\
+[handlers]\
+keys=console\
+\
+[formatters]\
+keys=standard\
+\
+[logger_root]\
+level=DEBUG\
+handlers=console\
+\
+[logger_uvicorn]\
+level=DEBUG\
+handlers=console\
+qualname=uvicorn\
+propagate=0\
+\
+[logger_uvicorn.error]\
+level=DEBUG\
+handlers=console\
+qualname=uvicorn.error\
+propagate=0\
+\
+[logger_uvicorn.access]\
+level=INFO\
+handlers=console\
+qualname=uvicorn.access\
+propagate=0\
+\
+[handler_console]\
+class=StreamHandler\
+level=DEBUG\
+formatter=standard\
+args=(sys.stdout,)\
+\
+[formatter_standard]\
+format=%(asctime)s %(levelname)-7s %(name)s %(message)s\
+datefmt=%Y-%m-%dT%H:%M:%S%z\
+" > /app/logging.ini
+
+# Create non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+# Run API with explicit log-config (timestamps) & DEBUG
+# Access logs remain enabled; adjust as needed.
+CMD ["uvicorn", "app.main:app", \
+     "--host", "0.0.0.0", "--port", "8000", \
+     "--log-config", "/app/logging.ini"]
