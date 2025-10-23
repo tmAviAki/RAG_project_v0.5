@@ -1,3 +1,4 @@
+.env
 *.db*
 dist/
 export_data/

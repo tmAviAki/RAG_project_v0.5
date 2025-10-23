@@ -2,7 +2,7 @@
 services:
   api:
     build: ./server
-    container_name: RAG_Conf_ADO_api
+    container_name: RAG_Conf_ADO_api_v0.5
     environment:
       - DATA_ROOT=/data
       - INDEX_PATH=/index/docs.db
@@ -36,7 +36,7 @@ services:
       - OCR_DPI=${OCR_DPI:-50}
       - OCR_JOBS=${OCR_JOBS:-0}
     ports:
-      - "9800:8000"
+      - "9000:8000"
     volumes:
       - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
       - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index

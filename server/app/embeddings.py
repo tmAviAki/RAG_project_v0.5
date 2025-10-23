@@ -1,117 +1,178 @@
-# Project: confAdogpt  Component: embeddings  Version: v0.9.1
+# File: server/app/embeddings.py
+# Project: RAG_project_v0.5  Component: embeddings  Version: v0.9.2
 from __future__ import annotations
 
+import hashlib
+import inspect
+import math
 import os
 import time
-from typing import List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
-import numpy as np
 import httpx
+import numpy as np
 
 try:
-    from .embed_cache import EmbedCache
+    from .embed_cache import EmbedCache  # optional, adapter handles variants
 except Exception:
-    EmbedCache = None  # cache optional
+    EmbedCache = None  # type: ignore
 
-# Environment
-ALLOW_REMOTE = os.getenv("ALLOW_REMOTE_EMBEDDINGS", "0") == "1"
-MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+MODEL = os.getenv("MODEL", "text-embedding-3-small")
 DIM_DEFAULT = int(os.getenv("EMBED_DIM", "1536"))
+ALLOW_REMOTE = os.getenv("ALLOW_REMOTE_EMBEDDINGS", "1") == "1"
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_TIMEOUT_SECS = float(os.getenv("OPENAI_TIMEOUT_SECS", "30"))
 MAX_RETRIES = int(os.getenv("EMBED_MAX_RETRIES", "4"))
 BACKOFF_MIN = float(os.getenv("EMBED_BACKOFF_MIN_MS", "500")) / 1000.0
 BACKOFF_MAX = float(os.getenv("EMBED_BACKOFF_MAX_MS", "4000")) / 1000.0
 
-_singleton_fake = None
-_singleton_remote = None
-_cache = None
+_singleton_fake: Optional["FakeEmbedder"] = None
+_singleton_remote: Optional["OpenAIEmbedder"] = None
+_cache_singleton: Optional["EmbedCache"] = None
+
 
 def _get_cache() -> Optional["EmbedCache"]:
-    global _cache
-    if _cache is None and EmbedCache is not None:
-        try:
-            _cache = EmbedCache()
-        except Exception:
-            _cache = None
-    return _cache
+    global _cache_singleton
+    if _cache_singleton is not None:
+        return _cache_singleton
+    if EmbedCache is None:
+        return None
+    try:
+        _cache_singleton = EmbedCache()  # type: ignore[call-arg]
+        return _cache_singleton
+    except Exception:
+        return None
+
 
 def _hash_text(text: str) -> str:
-    import hashlib
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+
+def _l2_normalize(vec: Sequence[float]) -> List[float]:
+    s = math.sqrt(sum((x * x) for x in vec)) or 1.0
+    return [float(x / s) for x in vec]
+
+
+class _CacheAdapter:
+    def __init__(self, cache: EmbedCache):
+        self.cache = cache
+        self.sig_get = None
+        self.sig_put = None
+        if hasattr(cache, "get_many"):
+            self.sig_get = inspect.signature(cache.get_many)  # type: ignore
+        if hasattr(cache, "put_many"):
+            self.sig_put = inspect.signature(cache.put_many)  # type: ignore
+
+    def get_many(self, pairs: Iterable[Tuple[str, str]]) -> Dict[str, List[float]]:
+        if not self.sig_get:
+            return {}
+        params = list(self.sig_get.parameters.values())
+        if len(params) == 2:
+            return self.cache.get_many(list(pairs))  # type: ignore
+        if len(params) == 4:
+            hashes = [h for (h, _m) in pairs]
+            model = next(iter(pairs))[1] if pairs else MODEL
+            dim = DIM_DEFAULT
+            return self.cache.get_many(hashes, model, dim)  # type: ignore
+        return {}
+
+    def put_many(
+        self, tuples: Iterable[Tuple[str, str, int, List[float]]]
+    ) -> None:
+        if not self.sig_put:
+            return
+        params = list(self.sig_put.parameters.values())
+        if len(params) == 2:
+            self.cache.put_many(list(tuples))  # type: ignore
+            return
+        if len(params) == 5:
+            hashes = [h for (h, _m, _d, _v) in tuples]
+            model = next(iter(tuples))[1] if tuples else MODEL
+            dim = next(iter(tuples))[2] if tuples else DIM_DEFAULT
+            vecs = [v for (_h, _m, _d, v) in tuples]
+            self.cache.put_many(hashes, model, dim, vecs)  # type: ignore
+
+
 class FakeEmbedder:
-    def __init__(self, dim: int):
+    def __init__(self, dim: int) -> None:
         self.dim = int(dim)
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
-        arr = np.zeros((len(texts), self.dim), dtype=np.float32)
-        for i, t in enumerate(texts):
-            h = int(_hash_text(t)[:16], 16)
-            rng = np.random.RandomState(h & 0x7FFFFFFF)
-            v = rng.standard_normal(self.dim).astype(np.float32)
-            n = np.linalg.norm(v)
-            arr[i, :] = v / (n if n > 0 else 1.0)
-        return [row.tolist() for row in arr]
+        out: List[List[float]] = []
+        for t in texts:
+            h = hashlib.blake2b(t.encode("utf-8"), digest_size=32).digest()
+            rng = np.random.default_rng(int.from_bytes(h[:8], "big"))
+            vec = rng.standard_normal(self.dim).astype(np.float32)
+            out.append(_l2_normalize(vec.tolist()))
+        return out
+
 
 class OpenAIEmbedder:
-    def __init__(self, model: str, dim: int, timeout: float):
+    def __init__(self, model: str, dim: int, timeout_s: float) -> None:
         self.model = model
         self.dim = int(dim)
-        self._timeout = timeout
-        self._client = None
+        self.timeout_s = float(timeout_s)
 
-    def _client_open(self):
-        if self._client is None:
-            try:
-                from openai import OpenAI  # lazy import
-            except Exception as e:
-                raise RuntimeError(
-                    "Remote embeddings requested but 'openai' is not installed"
-                ) from e
-            transport = httpx.HTTPTransport(retries=0)
-            session = httpx.Client(timeout=self._timeout, transport=transport)
-            self._client = OpenAI(http_client=session)
-        return self._client
+    def _client(self) -> httpx.Client:
+        return httpx.Client(
+            base_url=OPENAI_BASE_URL,
+            timeout=self.timeout_s,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+        )
 
     def embed_texts(self, texts: List[str]) -> List[List[float]]:
         if not texts:
             return []
-        cli = self._client_open()
         cache = _get_cache()
-        to_query: List[Tuple[int, str]] = []
-        out: List[Optional[List[float]]] = [None] * len(texts)
+        adapter = _CacheAdapter(cache) if cache else None
 
-        if cache is not None:
-            keys = [_hash_text(t) for t in texts]
-            hits = cache.get_many(keys, self.model, self.dim)
-            for i, v in enumerate(hits):
-                if v is None:
-                    to_query.append((i, texts[i]))
-                else:
+        out: Dict[int, List[float]] = {}
+        to_query: List[Tuple[int, str]] = []
+
+        hashes = [_hash_text(t) for t in texts]
+        if adapter:
+            got = adapter.get_many([(h, self.model) for h in hashes])
+            for i, h in enumerate(hashes):
+                v = got.get(h)
+                if v and len(v) == self.dim:
                     out[i] = v
+                else:
+                    to_query.append((i, texts[i]))
         else:
-            for i, t in enumerate(texts):
-                to_query.append((i, t))
+            to_query = list(enumerate(texts))
 
         if to_query:
-            ordered = [t for _, t in to_query]
+            ordered = [t for (_i, t) in to_query]
             backoff = BACKOFF_MIN
             for attempt in range(MAX_RETRIES):
                 try:
-                    resp = cli.embeddings.create(model=self.model, input=ordered)
-                    vecs = [d.embedding for d in resp.data]
-                    if cache is not None:
-                        cache.put_many([_hash_text(t) for t in ordered], self.model, self.dim, vecs)
+                    with self._client() as cli:
+                        resp = cli.post(
+                            "/embeddings",
+                            json={"model": self.model, "input": ordered},
+                        )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    vecs = [d["embedding"] for d in data.get("data", [])]
+                    if adapter:
+                        tuples = [
+                            (_hash_text(t), self.model, self.dim, _l2_normalize(v))
+                            for t, v in zip(ordered, vecs)
+                        ]
+                        adapter.put_many(tuples)
                     for (i, _), v in zip(to_query, vecs):
-                        if len(v) != self.dim:
-                            raise RuntimeError("Embedding dimension mismatch")
-                        out[i] = v
+                        out[i] = _l2_normalize(v)
                     break
                 except Exception:
+                    if attempt + 1 >= MAX_RETRIES:
+                        raise
                     time.sleep(min(backoff, BACKOFF_MAX))
                     backoff *= 2.0
 
-        return [v if v is not None else [0.0] * self.dim for v in out]
+        return [out[i] for i in range(len(texts))]
+
 
 def get_embedder(dim_hint: Optional[int] = None, force_local: bool = False):
     dim = int(dim_hint or DIM_DEFAULT or 1536)
@@ -125,4 +186,6 @@ def get_embedder(dim_hint: Optional[int] = None, force_local: bool = False):
         _singleton_fake = FakeEmbedder(dim)
     return _singleton_fake
 
+
 __all__ = ["FakeEmbedder", "OpenAIEmbedder", "get_embedder"]
+
