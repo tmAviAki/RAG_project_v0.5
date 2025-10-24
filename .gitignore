@@ -1,3 +1,4 @@
+# Project:RAG_project_v0.5 Component:gitignore Version:v0.7.0
 .env
 *.db*
 dist/
@@ -5,3 +6,10 @@ export_data/
 index/
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.eggs/
+.eggs/**
+build/
+*.egg-info/
+

@@ -1,4 +1,4 @@
-# Project: confAdogpt  Component: Dockerfile  Version: v1.3.1
+# Project:RAG_project_v0.5 Component:Dockerfile Version:v1.4.0
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -24,13 +24,16 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       sudo \
       bash \
     && ln -sf /bin/bash /bin/sh \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists*
 
 WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir -r requirements.txt
+# P2 deps for Postgres + pgvector
+RUN pip install --no-cache-dir 'psycopg[binary]>=3.1' 'pgvector>=0.2.4'
+
 RUN pip install --no-cache-dir \
       pillow \
       pytesseract \
@@ -41,6 +44,7 @@ RUN pip install --no-cache-dir \
 
 COPY app ./app
 
+# logging config (unchanged)
 RUN cat > /app/logging.ini <<'EOF'
 [loggers]
 keys=root,uvicorn,uvicorn.error,uvicorn.access

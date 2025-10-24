@@ -9,4 +9,9 @@ for vector search and answering with citations. Code ingestion endpoints are stu
 - Code: /v1/code/file works; symbol/deps endpoints return 501 until enabled.
 ### v0.6.1 (20251024)
 P1 stabilization for Actions: 3.1.1 spec; remove HEAD; query analyzer; search knobs; release targets in Makefile.
+### v0.7.0 (2025-10-24)
+P2 Hybrid retrieval:
+- Introduces Postgres+pgvector with HNSW index and BM25/tsvector clauses
+- Adds hybrid search + code symbols + grep + graph neighbors endpoints
+- Provides ingestion script and migration SQL; keeps existing SQLite path intact
 
