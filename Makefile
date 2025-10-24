@@ -1,27 +1,22 @@
-# Makefile
-# Project: confAdogpt  Component: Makefile  Version: v0.7.3
-.PHONY: build up down code-ingest xref ingest-all test csv-ingest
+# Project:RAG_project_v0.5 Component:Makefile Version:v0.6.1
+.PHONY: release-patch release-minor release-major dist clean
+VERSION?=$(shell git describe --tags --abbrev=0 2>/dev/null || echo v0.6.1)
 
-build:
-	docker compose build --no-cache --pull
+dist:
+	mkdir -p dist
+	tar -czf dist/rag_api_$(VERSION).tar.gz server openapi docker-compose.yml
+	shasum -a 256 dist/rag_api_$(VERSION).tar.gz > dist/rag_api_$(VERSION).sha256
 
-up:
-	docker compose up -d api
+release-patch:
+	git tag -a $(VERSION) -m "patch"
+	git push --tags
 
-down:
-	docker compose down
+release-minor:
+	@echo "Bump minor manually then tag"
 
-test:
-	docker compose run --rm api pytest -q
+release-major:
+	@echo "Bump major manually then tag"
 
-csv-ingest:
-	bash scripts/ingest_all.sh
+clean:
+	rm -rf dist
 
-code-ingest:
-	bash scripts/code_ingest.sh
-
-xref:
-	bash scripts/xref_rebuild.sh
-
-ingest-all:
-	bash scripts/ingest_all_v072.sh

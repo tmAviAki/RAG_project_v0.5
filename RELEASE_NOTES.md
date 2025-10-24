@@ -7,4 +7,6 @@ for vector search and answering with citations. Code ingestion endpoints are stu
 - Embeddings: offline FakeEmbedder by default; optional OpenAI backend if ALLOW_REMOTE_EMBEDDINGS=1.
 - Endpoints: /v1/semantic/search and /v1/answer (byte-capped).
 - Code: /v1/code/file works; symbol/deps endpoints return 501 until enabled.
+### v0.6.1 (20251024)
+P1 stabilization for Actions: 3.1.1 spec; remove HEAD; query analyzer; search knobs; release targets in Makefile.
 

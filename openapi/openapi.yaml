@@ -1,10 +1,13 @@
-openapi: 3.1.0
+# Project:RAG_project_v0.5 Component:openapi Version:v0.6.1
+openapi: 3.1.1
 info:
   title: Confluence Evidence API
-  version: "1.3.2"
+  version: "1.3.3-actions"
 servers:
   - url: http://localhost:9000
   - url: http://localhost:8000
+security:
+  - bearerAuth: []
 components:
   securitySchemes:
     bearerAuth:
@@ -15,15 +18,24 @@ components:
     PagedResponse:
       type: object
       properties:
-        items: { type: array, items: { type: object } }
-        next: { type: integer, nullable: true }
-        approx_bytes: { type: integer }
-security: [{ bearerAuth: [] }]
+        items:
+          type: array
+          items: {}
+        next:
+          type: integer
+      additionalProperties: false
+    AnswerRequest:
+      type: object
+      properties:
+        question: { type: string }
+        k: { type: integer, default: 12 }
+        force_abstain_if_no_citations: { type: boolean, default: true }
+      required: [question]
+      additionalProperties: false
 paths:
   /v1/health:
     get:
-      operationId: health
-      summary: Liveness probe
+      security: []
       responses:
         '200':
           description: OK
@@ -31,49 +43,68 @@ paths:
             application/json:
               schema:
                 type: object
-                properties:
-                  status: { type: string }
+                properties: { ok: { type: boolean } }
+                additionalProperties: false
+  /v1/stats:
+    get:
+      responses:
+        '200':
+          description: Stats
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+  /v1/spaces:
+    get:
+      responses:
+        '200':
+          description: Spaces
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
   /v1/search:
     get:
-      operationId: search
-      summary: Full-text search with byte-capped page
       parameters:
         - in: query
           name: q
           schema: { type: string }
         - in: query
           name: space
-          schema: { type: string }
+          schema: { type: string, nullable: true }
         - in: query
           name: type
-          schema: { type: string }
+          schema: { type: string, nullable: true }
         - in: query
-          name: limit
-          schema: { type: integer, default: 200 }
+          name: k
+          schema: { type: integer, default: 200, minimum: 1, maximum: 5000 }
         - in: query
           name: cursor
-          schema: { type: integer, default: 0 }
+          schema: { type: integer, default: 0, minimum: 0 }
+        - in: query
+          name: chunk_bytes
+          schema: { type: integer, default: 90000, minimum: 10000, maximum: 200000 }
       responses:
         '200':
-          description: Results
+          description: Paged results
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PagedResponse'
   /v1/stream/search:
     get:
-      operationId: streamSearch
-      summary: NDJSON streaming search
       parameters:
         - in: query
           name: q
           schema: { type: string }
         - in: query
           name: space
-          schema: { type: string }
+          schema: { type: string, nullable: true }
         - in: query
           name: type
-          schema: { type: string }
+          schema: { type: string, nullable: true }
         - in: query
           name: limit
           schema: { type: integer, default: 200 }
@@ -92,8 +123,6 @@ paths:
                 type: string
   /v1/fetch:
     get:
-      operationId: fetchByIds
-      summary: Fetch items by IDs (paged)
       parameters:
         - in: query
           name: ids
@@ -103,15 +132,13 @@ paths:
           schema: { type: integer, default: 90000 }
       responses:
         '200':
-          description: Results
+          description: Paged docs
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PagedResponse'
   /v1/stream/fetch:
     get:
-      operationId: streamFetch
-      summary: NDJSON streaming fetch
       parameters:
         - in: query
           name: ids
@@ -126,3 +153,60 @@ paths:
             application/x-ndjson:
               schema:
                 type: string
+  /v1/semantic/search:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                q: { type: string }
+                k: { type: integer, default: 12 }
+              required: [q]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: object, additionalProperties: true }
+  /v1/answer:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswerRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer: { type: string }
+                  citations: { type: array, items: { type: object, additionalProperties: true } }
+                  confidence: { type: number, nullable: true }
+                  abstained: { type: boolean, nullable: true }
+                additionalProperties: false
+  /v1/stream/answer:
+    post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnswerRequest'
+      responses:
+        '200':
+          description: NDJSON stream of events ≤90KB
+          content:
+            application/x-ndjson:
+              schema:
+                type: string
+
