@@ -1,4 +1,4 @@
-# Project:RAG_project_v0.5 Component:Dockerfile Version:v1.4.0
+# Project:RAG_project_v0.5 Component:Dockerfile Version:v1.4.1
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -19,6 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       ocrmypdf qpdf ghostscript unpaper pngquant \
       jq \
       sqlite3 \
+      postgresql-client \
       tini \
       xxd \
       sudo \
@@ -43,6 +44,7 @@ RUN pip install --no-cache-dir \
       python-magic
 
 COPY app ./app
+COPY migrations ./migrations
 
 # logging config (unchanged)
 RUN cat > /app/logging.ini <<'EOF'
@@ -89,5 +91,6 @@ HEALTHCHECK --interval=10s --timeout=3s --retries=10 \
   CMD curl -fsS http://localhost:8000/v1/health || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "/app/logging.ini", "--proxy-headers", "--timeout-keep-alive", "10"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--log-config", "/app/logging.ini", "--proxy-headers", "--timeout-keep-alive", "10"]
 

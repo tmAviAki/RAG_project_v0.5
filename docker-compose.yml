@@ -1,8 +1,28 @@
-# Project: confAdogpt  Component: compose  Version: v0.5.0
+# Project:RAG_project_v0.5 Component:compose.unified Version:v0.7.7
 services:
+  pg:
+    build:
+      context: .
+      dockerfile: server/pg/Dockerfile
+    container_name: RAG_v0.7.5_rag_pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fabrix}
+    ports:
+      - "5532:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    profiles: ["pg"]
+
   api:
     build: ./server
-    container_name: RAG_Conf_ADO_api_v0.5
+    container_name: RAG_v0.7.5_api
     environment:
       - DATA_ROOT=/data
       - INDEX_PATH=/index/docs.db
@@ -11,13 +31,13 @@ services:
       - AUTO_INGEST=${AUTO_INGEST:-0}
       - ALLOW_ORIGINS=${ALLOW_ORIGINS:-*}
       - ADO_ROOT=${ADO_ROOT:-/ado}
-      - API_KEY=${API_KEY}
+      - API_KEY=${API_KEY:-}
       - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - EMBED_DIM=${EMBED_DIM:-1536}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBED_DIM=${EMBED_DIM:-3072}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-large}
       - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
-      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
+      - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKONS_PER_ITEM:-8000}
       - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
       - EMBED_RPM_LIMIT=${EMBED_RPM_LIMIT:-5000}
       - EMBED_HEADROOM=${EMBED_HEADROOM:-0.90}
@@ -26,15 +46,15 @@ services:
       - EMBED_BACKOFF_MIN_MS=${EMBED_BACKOFF_MIN_MS:-500}
       - EMBED_BACKOFF_MAX_MS=${EMBED_BACKOFF_MAX_MS:-4000}
       - OPENAI_TIMEOUT_SECS=${OPENAI_TIMEOUT_SECS:-30}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       - ENABLE_TREE_SITTER=${ENABLE_TREE_SITTER:-0}
-      - CODE_ROOT=${CODE_ROOT}
-      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE}
-      - OCR_ENABLED=${OCR_ENABLED:-0}
-      - OCR_PDF_IF_EMPTY=${OCR_PDF_IF_EMPTY:-0}
-      - OCR_IMAGES=${OCR_IMAGES:-0}
-      - OCR_DPI=${OCR_DPI:-50}
-      - OCR_JOBS=${OCR_JOBS:-0}
+      - CODE_ROOT=${CODE_ROOT:-/code}
+      - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE:-}
+      - PGHOST=pg
+      - PGPORT=5432
+      - PGDATABASE=${POSTGRES_DB:-rag}
+      - PGUSER=${POSTGRES_USER:-rag}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-fabrix}
     ports:
       - "9000:8000"
     volumes:
@@ -51,10 +71,7 @@ services:
     mem_reservation: "1g"
     mem_limit: "2g"
     memswap_limit: "2g"
-    ulimits:
-      nofile:
-        soft: 65536
-        hard: 65536
+    ulimits: { nofile: { soft: 65536, hard: 65536 } }
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "5" }
@@ -62,8 +79,9 @@ services:
 
   ingest:
     build: ./server
-    container_name: confAdogpt_ingest
-    command: ["python", "-m", "app.indexer", "--data-root", "/data", "--index-path", "/index/docs.db", "--ado-root", "${ADO_ROOT:-/ado}"]
+    container_name: RAG_v0.7.5_ingest
+    command: ["python", "-m", "app.indexer", "--data-root", "/data",
+              "--index-path", "/index/docs.db", "--ado-root", "${ADO_ROOT:-/ado}"]
     environment:
       - DATA_ROOT=/data
       - INDEX_PATH=/index/docs.db
@@ -75,18 +93,13 @@ services:
       - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
       - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
     profiles: ["tools"]
-    cpus: "2.00"
-    mem_reservation: "3g"
-    mem_limit: "6g"
-    memswap_limit: "6g"
-    ulimits: { nofile: { soft: 65536, hard: 65536 } }
-    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
     restart: on-failure
 
   att_ingest:
     build: ./server
-    container_name: confAdogpt_att_ingest
-    command: ["python", "-u", "-m", "app.attachments_ingest", "--spaces", "ALL", "--batch", "300"]
+    container_name: RAG_v0.7.5_att_ingest
+    command: ["python", "-u", "-m", "app.attachments_ingest", "--spaces", "ALL",
+              "--batch", "300"]
     environment:
       - DATA_ROOT=/data
       - INDEX_PATH=/index/docs.db
@@ -99,9 +112,9 @@ services:
       - OCR_JOBS=${OCR_JOBS:-0}
       - ALLOW_QUERY_FALLBACK=${ALLOW_QUERY_FALLBACK:-1}
       - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - EMBED_DIM=${EMBED_DIM:-1536}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBED_DIM=${EMBED_DIM:-3072}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-large}
       - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
       - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
       - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
@@ -118,17 +131,11 @@ services:
       - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
       - /mnt/disks/data/fetch_ado_items/.ado_cache/8127d161517e897b:/ado:ro
     profiles: ["tools"]
-    cpus: "2.00"
-    mem_reservation: "3g"
-    mem_limit: "6g"
-    memswap_limit: "6g"
-    ulimits: { nofile: { soft: 65536, hard: 65536 } }
-    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
     restart: on-failure
 
   code_ingest:
     build: ./server
-    container_name: confAdogpt_code_ingest
+    container_name: RAG_v0.7.5__code_ingest
     command: ["python", "-u", "-m", "app.code_ingest", "--code-root", "/code"]
     environment:
       - INDEX_ROOT=${INDEX_ROOT:-/index}
@@ -153,9 +160,9 @@ services:
       - CODE_BUILD_XREF=${CODE_BUILD_XREF:-0}
       - CODE_URL_TEMPLATE=${CODE_URL_TEMPLATE:-}
       - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - EMBED_DIM=${EMBED_DIM:-1536}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EMBED_DIM=${EMBED_DIM:-3072}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-large}
       - EMBED_MAX_TOKENS_PER_REQ=${EMBED_MAX_TOKENS_PER_REQ:-250000}
       - EMBED_MAX_TOKENS_PER_ITEM=${EMBED_MAX_TOKENS_PER_ITEM:-8000}
       - EMBED_TPM_LIMIT=${EMBED_TPM_LIMIT:-1000000}
@@ -170,32 +177,37 @@ services:
       - ${CODE_HOST_PATH:-/mnt/disks/data/source-code}:/code:ro
       - ./index:/index
     profiles: ["tools"]
-    cpus: "1.25"
-    mem_reservation: "3g"
-    mem_limit: "6g"
-    memswap_limit: "6g"
-    ulimits: { nofile: { soft: 65536, hard: 65536 } }
-    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
     restart: on-failure
 
-  xref_build:
+  ingest_pg:
     build: ./server
-    container_name: confAdogpt_xref_build
-    command: ["python", "-u", "-m", "app.xref_build"]
+    container_name: RAG_v0.7.5_ingest_pg
+    # CHANGED: -u (unbuffered), and watch mode envs control the loop
+    command: ["python", "-u", "-m", "app.scripts.ingest_pgvector"]
     environment:
-      - INDEX_ROOT=${INDEX_ROOT:-/index}
-      - XREF_LOG_PATH=/index/xref_build.log
+      - DATA_ROOT=/data
+      - INDEX_ROOT=/index
+      - PGHOST=pg
+      - PGPORT=5432
+      - PGDATABASE=${POSTGRES_DB:-rag}
+      - PGUSER=${POSTGRES_USER:-rag}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-fabrix}
+      - EMBED_DIM=${EMBED_DIM:-3072}
+      - ALLOW_REMOTE_EMBEDDINGS=${ALLOW_REMOTE_EMBEDDINGS:-0}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-      - XREF_FANOUT_MAX=${XREF_FANOUT_MAX:-32}
-      - XREF_PROGRESS_EVERY=${XREF_PROGRESS_EVERY:-50000}
+      - EMBED_BATCH=${EMBED_BATCH:-16}
+      - OPENAI_TIMEOUT_SECS=${OPENAI_TIMEOUT_SECS:-20}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-large}
+      - MODEL=${MODEL:-text-embedding-3-large}
     volumes:
+      - /mnt/disks/data/confgpt_action_server_docker_compose/export_data:/data:ro
       - /mnt/disks/data/confgpt_action_server_docker_compose/index:/index
-    profiles: ["tools"]
-    cpus: "1.00"
-    mem_reservation: "1g"
-    mem_limit: "2g"
-    memswap_limit: "2g"
-    ulimits: { nofile: { soft: 65536, hard: 65536 } }
-    logging: { driver: json-file, options: { max-size: "20m", max-file: "5" } }
-    restart: on-failure
+    depends_on:
+      pg:
+        condition: service_healthy
+    profiles: ["pg", "tools"]
+    restart: unless-stopped
 
+volumes:
+  pgdata:
