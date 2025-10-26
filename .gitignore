@@ -12,4 +12,8 @@ __pycache__/
 .eggs/**
 build/
 *.egg-info/
-
+.env.orig
+.env
+.env.*
+*.env
+*.env.*
