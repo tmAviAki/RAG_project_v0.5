@@ -1,5 +1,5 @@
 # Project:RAG_project_v0.5 Component:gitignore Version:v0.7.0
-.env
+.env*
 *.db*
 dist/
 export_data/
