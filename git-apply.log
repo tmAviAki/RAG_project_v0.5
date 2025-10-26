@@ -1,0 +1,2 @@
+19:24:11.090673 git.c:350               trace: built-in: git 'apply' '-v' 'rag_v0_5_update.patch'
+fatal: unrecognized input

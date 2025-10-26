@@ -1,0 +1,46 @@
+# Project:RAG_project_v0.5 Component:compose.pgvector Version:v0.7.0
+services:
+  pg:
+    image: postgres:16
+    container_name: rag_pg
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rag}
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fabrix}
+    ports:
+      - "5532:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./server
+    environment:
+      PG_DSN: ${PG_DSN:-postgresql://rag:${POSTGRES_PASSWORD:-fabrix}@pg:5432/${POSTGRES_DB:-rag}}
+      EMBED_DIM: ${EMBED_DIM:-3072}
+    depends_on:
+      pg:
+        condition: service_healthy
+
+  ingest_pg:
+    build: ./server
+    command: ["python", "-m", "app.scripts.ingest_pgvector"]
+    environment:
+      DATA_ROOT: /data
+      PG_DSN: ${PG_DSN:-postgresql://rag:${POSTGRES_PASSWORD:-fabrix}@pg:5432/${POSTGRES_DB:-rag}}
+      EMBED_DIM: ${EMBED_DIM:-3072}
+      ALLOW_REMOTE_EMBEDDINGS: ${ALLOW_REMOTE_EMBEDDINGS:-0}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - ./export_data:/data:ro
+    depends_on:
+      pg:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+
